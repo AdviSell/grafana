@@ -129,9 +129,7 @@ const getCommonPlugins = (options: WebpackConfigurationOptions) => {
       },
     ]),
     new ForkTsCheckerWebpackPlugin({
-      tsconfig: path.join(process.cwd(), 'tsconfig.json'),
-      // Only report problems in detected in plugin's code
-      reportFiles: ['**/*.{ts,tsx}'],
+      typescript: { configFile: path.join(process.cwd(), 'tsconfig.json') },
     }),
   ];
 };
