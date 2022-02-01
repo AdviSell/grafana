@@ -571,6 +571,13 @@ describe('PrometheusDatasource', () => {
   });
 
   describe('applyTemplateVariables', () => {
+    const originalAdhocFiltersMock = templateSrvStub.getAdhocFilters();
+    const originalReplaceMock = jest.fn((a: string, ...rest: any) => a);
+    afterAll(() => {
+      templateSrvStub.getAdhocFilters.mockReturnValue(originalAdhocFiltersMock);
+      templateSrvStub.replace = originalReplaceMock;
+    });
+
     it('should call replace function for legendFormat', () => {
       const query = {
         expr: 'test{job="bar"}',
@@ -582,6 +589,19 @@ describe('PrometheusDatasource', () => {
 
       const interpolatedQuery = ds.applyTemplateVariables(query, { legend: { text: legend, value: legend } });
       expect(interpolatedQuery.legendFormat).toBe(legend);
+    });
+
+    it('should call replace function for interval', () => {
+      const query = {
+        expr: 'test{job="bar"}',
+        interval: '$step',
+        refId: 'A',
+      };
+      const step = '5s';
+      templateSrvStub.replace.mockReturnValue(step);
+
+      const interpolatedQuery = ds.applyTemplateVariables(query, { step: { text: step, value: step } });
+      expect(interpolatedQuery.interval).toBe(step);
     });
 
     it('should call replace function for expr', () => {
@@ -596,19 +616,31 @@ describe('PrometheusDatasource', () => {
       expect(interpolatedQuery.expr).toBe(job);
     });
 
-    it('should not call replace function for interval', () => {
+    it('should add ad-hoc filters to expr', () => {
+      templateSrvStub.replace = jest.fn((a: string) => a);
+      templateSrvStub.getAdhocFilters.mockReturnValue([
+        {
+          key: 'k1',
+          operator: '=',
+          value: 'v1',
+        },
+        {
+          key: 'k2',
+          operator: '!=',
+          value: 'v2',
+        },
+      ]);
+
       const query = {
         expr: 'test{job="bar"}',
-        interval: '$interval',
         refId: 'A',
       };
-      const interval = '10s';
-      templateSrvStub.replace.mockReturnValue(interval);
 
-      const interpolatedQuery = ds.applyTemplateVariables(query, { interval: { text: interval, value: interval } });
-      expect(interpolatedQuery.interval).not.toBe(interval);
+      const result = ds.applyTemplateVariables(query, {});
+      expect(result).toMatchObject({ expr: 'test{job="bar",k1="v1",k2!="v2"}' });
     });
   });
+
   describe('metricFindQuery', () => {
     beforeEach(() => {
       const query = 'query_result(topk(5,rate(http_request_duration_microseconds_count[$__interval])))';
@@ -871,26 +903,7 @@ describe('PrometheusDatasource', () => {
       },
     };
 
-    const response = {
-      status: 'success',
-      data: {
-        data: {
-          resultType: 'matrix',
-          result: [
-            {
-              metric: {
-                __name__: 'ALERTS',
-                alertname: 'InstanceDown',
-                alertstate: 'firing',
-                instance: 'testinstance',
-                job: 'testjob',
-              },
-              values: [[123, '1']],
-            },
-          ],
-        },
-      },
-    };
+    const response = createAnnotationResponse();
 
     describe('when time series query is cancelled', () => {
       it('should return empty results', async () => {
@@ -919,7 +932,7 @@ describe('PrometheusDatasource', () => {
         expect(results[0].tags).toContain('testjob');
         expect(results[0].title).toBe('InstanceDown');
         expect(results[0].text).toBe('testinstance');
-        expect(results[0].time).toBe(123 * 1000);
+        expect(results[0].time).toBe(123);
       });
     });
 
@@ -934,7 +947,7 @@ describe('PrometheusDatasource', () => {
       });
 
       it('should return annotation list', () => {
-        expect(results[0].time).toEqual(1);
+        expect(results[0].time).toEqual(456);
       });
     });
 
@@ -953,7 +966,7 @@ describe('PrometheusDatasource', () => {
         };
         ds.annotationQuery(query);
         const req = fetchMock.mock.calls[0][0];
-        expect(req.url).toContain('step=60');
+        expect(req.data.queries[0].interval).toBe('60s');
       });
 
       it('should use default step for short range when annotation step is empty string', () => {
@@ -970,7 +983,7 @@ describe('PrometheusDatasource', () => {
         };
         ds.annotationQuery(query);
         const req = fetchMock.mock.calls[0][0];
-        expect(req.url).toContain('step=60');
+        expect(req.data.queries[0].interval).toBe('60s');
       });
 
       it('should use custom step for short range', () => {
@@ -988,42 +1001,7 @@ describe('PrometheusDatasource', () => {
         };
         ds.annotationQuery(query);
         const req = fetchMock.mock.calls[0][0];
-        expect(req.url).toContain('step=10');
-      });
-
-      it('should use custom step for short range', () => {
-        const annotation = {
-          ...options.annotation,
-          step: '10s',
-        };
-        const query = {
-          ...options,
-          annotation,
-          range: {
-            from: time({ seconds: 63 }),
-            to: time({ seconds: 123 }),
-          },
-        };
-        ds.annotationQuery(query);
-        const req = fetchMock.mock.calls[0][0];
-        expect(req.url).toContain('step=10');
-      });
-
-      it('should use dynamic step on long ranges if no option was given', () => {
-        const query = {
-          ...options,
-          range: {
-            from: time({ seconds: 63 }),
-            to: time({ hours: 24 * 30, seconds: 63 }),
-          },
-        };
-        ds.annotationQuery(query);
-        const req = fetchMock.mock.calls[0][0];
-        // Range in seconds: (to - from) / 1000
-        // Max_datapoints: 11000
-        // Step: range / max_datapoints
-        const step = 236;
-        expect(req.url).toContain(`step=${step}`);
+        expect(req.data.queries[0].interval).toBe('10s');
       });
     });
 
@@ -1041,21 +1019,9 @@ describe('PrometheusDatasource', () => {
         },
       };
 
-      async function runAnnotationQuery(resultValues: Array<[number, string]>) {
-        const response = {
-          status: 'success',
-          data: {
-            data: {
-              resultType: 'matrix',
-              result: [
-                {
-                  metric: { __name__: 'test', job: 'testjob' },
-                  values: resultValues,
-                },
-              ],
-            },
-          },
-        };
+      async function runAnnotationQuery(data: number[][]) {
+        let response = createAnnotationResponse();
+        response.data.results['X'].frames[0].data.values = data;
 
         options.annotation.useValueForTime = false;
         fetchMock.mockImplementation(() => of(response));
@@ -1065,14 +1031,8 @@ describe('PrometheusDatasource', () => {
 
       it('should handle gaps and inactive values', async () => {
         const results = await runAnnotationQuery([
-          [2 * 60, '1'],
-          [3 * 60, '1'],
-          // gap
-          [5 * 60, '1'],
-          [6 * 60, '1'],
-          [7 * 60, '1'],
-          [8 * 60, '0'], // false --> create new block
-          [9 * 60, '1'],
+          [2 * 60000, 3 * 60000, 5 * 60000, 6 * 60000, 7 * 60000, 8 * 60000, 9 * 60000],
+          [1, 1, 1, 1, 1, 0, 1],
         ]);
         expect(results.map((result) => [result.time, result.timeEnd])).toEqual([
           [120000, 180000],
@@ -1083,41 +1043,49 @@ describe('PrometheusDatasource', () => {
 
       it('should handle single region', async () => {
         const results = await runAnnotationQuery([
-          [2 * 60, '1'],
-          [3 * 60, '1'],
+          [2 * 60000, 3 * 60000],
+          [1, 1],
         ]);
         expect(results.map((result) => [result.time, result.timeEnd])).toEqual([[120000, 180000]]);
       });
 
       it('should handle 0 active regions', async () => {
         const results = await runAnnotationQuery([
-          [2 * 60, '0'],
-          [3 * 60, '0'],
-          [5 * 60, '0'],
+          [2 * 60000, 3 * 60000, 5 * 60000],
+          [0, 0, 0],
         ]);
         expect(results.length).toBe(0);
       });
 
       it('should handle single active value', async () => {
-        const results = await runAnnotationQuery([[2 * 60, '1']]);
+        const results = await runAnnotationQuery([[2 * 60000], [1]]);
         expect(results.map((result) => [result.time, result.timeEnd])).toEqual([[120000, 120000]]);
       });
     });
-  });
+    describe('with template variables', () => {
+      const originalReplaceMock = jest.fn((a: string, ...rest: any) => a);
+      afterAll(() => {
+        templateSrvStub.replace = originalReplaceMock;
+      });
 
-  describe('createAnnotationQueryOptions', () => {
-    it.each`
-      options                                | expected
-      ${{}}                                  | ${{ interval: '60s' }}
-      ${{ annotation: {} }}                  | ${{ annotation: {}, interval: '60s' }}
-      ${{ annotation: { step: undefined } }} | ${{ annotation: { step: undefined }, interval: '60s' }}
-      ${{ annotation: { step: null } }}      | ${{ annotation: { step: null }, interval: '60s' }}
-      ${{ annotation: { step: '' } }}        | ${{ annotation: { step: '' }, interval: '60s' }}
-      ${{ annotation: { step: 0 } }}         | ${{ annotation: { step: 0 }, interval: '60s' }}
-      ${{ annotation: { step: 5 } }}         | ${{ annotation: { step: 5 }, interval: '60s' }}
-      ${{ annotation: { step: '5m' } }}      | ${{ annotation: { step: '5m' }, interval: '5m' }}
-    `("when called with options: '$options'", ({ options, expected }) => {
-      expect(ds.createAnnotationQueryOptions(options)).toEqual(expected);
+      it('should interpolate variables in query expr', () => {
+        const query = {
+          ...options,
+          annotation: {
+            ...options.annotation,
+            expr: '$variable',
+          },
+          range: {
+            from: time({ seconds: 1 }),
+            to: time({ seconds: 2 }),
+          },
+        };
+        const interpolated = 'interpolated_expr';
+        templateSrvStub.replace.mockReturnValue(interpolated);
+        ds.annotationQuery(query);
+        const req = fetchMock.mock.calls[0][0];
+        expect(req.data.queries[0].expr).toBe(interpolated);
+      });
     });
   });
 
@@ -1724,6 +1692,35 @@ describe('PrometheusDatasource', () => {
       templateSrvStub.replace = jest.fn((a: string) => a);
     });
   });
+
+  it('should give back 1 exemplar target when multiple queries with exemplar enabled and same metric', () => {
+    const targetA: PromQuery = {
+      refId: 'A',
+      expr: 'histogram_quantile(0.95, sum(rate(tns_request_duration_seconds_bucket[5m])) by (le))',
+      exemplar: true,
+    };
+    const targetB: PromQuery = {
+      refId: 'B',
+      expr: 'histogram_quantile(0.5, sum(rate(tns_request_duration_seconds_bucket[5m])) by (le))',
+      exemplar: true,
+    };
+
+    ds.languageProvider = {
+      histogramMetrics: ['tns_request_duration_seconds_bucket'],
+    } as any;
+
+    const request = ({
+      targets: [targetA, targetB],
+      interval: '1s',
+      panelId: '',
+    } as any) as DataQueryRequest<PromQuery>;
+
+    const Aexemplars = ds.shouldRunExemplarQuery(targetA, request);
+    const BExpemplars = ds.shouldRunExemplarQuery(targetB, request);
+
+    expect(Aexemplars).toBe(true);
+    expect(BExpemplars).toBe(false);
+  });
 });
 
 describe('PrometheusDatasource for POST', () => {
@@ -2250,4 +2247,51 @@ function createDefaultPromResponse() {
       },
     },
   };
+}
+
+function createAnnotationResponse() {
+  const response = {
+    data: {
+      results: {
+        X: {
+          frames: [
+            {
+              schema: {
+                name: 'bar',
+                refId: 'X',
+                fields: [
+                  {
+                    name: 'Time',
+                    type: 'time',
+                    typeInfo: {
+                      frame: 'time.Time',
+                    },
+                  },
+                  {
+                    name: 'Value',
+                    type: 'number',
+                    typeInfo: {
+                      frame: 'float64',
+                    },
+                    labels: {
+                      __name__: 'ALERTS',
+                      alertname: 'InstanceDown',
+                      alertstate: 'firing',
+                      instance: 'testinstance',
+                      job: 'testjob',
+                    },
+                  },
+                ],
+              },
+              data: {
+                values: [[123], [456]],
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  return { ...response };
 }

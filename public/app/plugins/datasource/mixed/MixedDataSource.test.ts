@@ -2,6 +2,7 @@ import { LoadingState } from '@grafana/data';
 import { lastValueFrom } from 'rxjs';
 import { getQueryOptions } from 'test/helpers/getQueryOptions';
 import { DatasourceSrvMock, MockObservableDataSourceApi } from 'test/mocks/datasource_srv';
+import { MIXED_DATASOURCE_NAME } from './MixedDataSource';
 import { MixedDatasource } from './module';
 
 const defaultDS = new MockObservableDataSourceApi('DefaultDS', [{ data: ['DDD'] }]);
@@ -30,9 +31,9 @@ describe('MixedDatasource', () => {
       const ds = new MixedDatasource({} as any);
       const requestMixed = getQueryOptions({
         targets: [
-          { refId: 'QA', datasource: 'A' }, // 1
-          { refId: 'QB', datasource: 'B' }, // 2
-          { refId: 'QC', datasource: 'C' }, // 3
+          { refId: 'QA', datasource: { uid: 'A' } }, // 1
+          { refId: 'QB', datasource: { uid: 'B' } }, // 2
+          { refId: 'QC', datasource: { uid: 'C' } }, // 3
         ],
       });
 
@@ -52,11 +53,11 @@ describe('MixedDatasource', () => {
       const ds = new MixedDatasource({} as any);
       const requestMixed = getQueryOptions({
         targets: [
-          { refId: 'QA', datasource: 'A' }, // 1
-          { refId: 'QD', datasource: 'D' }, // 2
-          { refId: 'QB', datasource: 'B' }, // 3
-          { refId: 'QE', datasource: 'E' }, // 4
-          { refId: 'QC', datasource: 'C' }, // 5
+          { refId: 'QA', datasource: { uid: 'A' } }, // 1
+          { refId: 'QD', datasource: { uid: 'D' } }, // 2
+          { refId: 'QB', datasource: { uid: 'B' } }, // 3
+          { refId: 'QE', datasource: { uid: 'E' } }, // 4
+          { refId: 'QC', datasource: { uid: 'C' } }, // 5
         ],
       });
 
@@ -84,9 +85,9 @@ describe('MixedDatasource', () => {
     const ds = new MixedDatasource({} as any);
     const request: any = {
       targets: [
-        { refId: 'A', datasource: 'Loki' },
-        { refId: 'B', datasource: 'Loki' },
-        { refId: 'C', datasource: 'A' },
+        { refId: 'A', datasource: { uid: 'Loki' } },
+        { refId: 'B', datasource: { uid: 'Loki' } },
+        { refId: 'C', datasource: { uid: 'A' } },
       ],
     };
 
@@ -115,8 +116,8 @@ describe('MixedDatasource', () => {
     await expect(
       ds.query({
         targets: [
-          { refId: 'QA', datasource: 'A' },
-          { refId: 'QB', datasource: 'B' },
+          { refId: 'QA', datasource: { uid: 'A' } },
+          { refId: 'QB', datasource: { uid: 'B' } },
         ],
       } as any)
     ).toEmitValuesWith((results) => {
@@ -124,6 +125,19 @@ describe('MixedDatasource', () => {
       expect(results[0].key).toBe('mixed-0-');
       expect(results[1].key).toBe('mixed-1-');
       expect(results[1].state).toBe(LoadingState.Done);
+    });
+  });
+
+  it('should filter out MixedDataSource queries', async () => {
+    const ds = new MixedDatasource({} as any);
+
+    await expect(
+      ds.query({
+        targets: [{ refId: 'A', datasource: { uid: MIXED_DATASOURCE_NAME, id: 'datasource' } }],
+      } as any)
+    ).toEmitValuesWith((results) => {
+      expect(results).toHaveLength(1);
+      expect(results[0].data).toHaveLength(0);
     });
   });
 });

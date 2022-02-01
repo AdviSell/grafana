@@ -48,8 +48,11 @@ func NewSlackNotifier(model *NotificationChannelConfig, t *template.Template, fn
 	if model.Settings == nil {
 		return nil, receiverInitError{Cfg: *model, Reason: "no settings supplied"}
 	}
+	if model.SecureSettings == nil {
+		return nil, receiverInitError{Cfg: *model, Reason: "no secure settings supplied"}
+	}
 
-	slackURL := fn(context.Background(), model.SecureSettings, "url", model.Settings.Get("url").MustString(), setting.SecretKey)
+	slackURL := fn(context.Background(), model.SecureSettings, "url", model.Settings.Get("url").MustString())
 	if slackURL == "" {
 		slackURL = SlackAPIEndpoint
 	}
@@ -90,7 +93,7 @@ func NewSlackNotifier(model *NotificationChannelConfig, t *template.Template, fn
 		}
 	}
 
-	token := fn(context.Background(), model.SecureSettings, "token", model.Settings.Get("token").MustString(), setting.SecretKey)
+	token := fn(context.Background(), model.SecureSettings, "token", model.Settings.Get("token").MustString())
 	if token == "" && apiURL.String() == SlackAPIEndpoint {
 		return nil, receiverInitError{Cfg: *model,
 			Reason: "token must be specified when using the Slack chat API",
@@ -115,7 +118,7 @@ func NewSlackNotifier(model *NotificationChannelConfig, t *template.Template, fn
 		IconURL:        model.Settings.Get("icon_url").MustString(),
 		Token:          token,
 		Text:           model.Settings.Get("text").MustString(`{{ template "default.message" . }}`),
-		Title:          model.Settings.Get("title").MustString(`{{ template "default.title" . }}`),
+		Title:          model.Settings.Get("title").MustString(DefaultMessageTitleEmbed),
 		log:            log.New("alerting.notifier.slack"),
 		tmpl:           t,
 	}, nil
@@ -266,7 +269,7 @@ func (sn *SlackNotifier) buildSlackMessage(ctx context.Context, as []*types.Aler
 		},
 	}
 	if tmplErr != nil {
-		sn.log.Debug("failed to template Slack message", "err", tmplErr.Error())
+		sn.log.Warn("failed to template Slack message", "err", tmplErr.Error())
 	}
 
 	mentionsBuilder := strings.Builder{}

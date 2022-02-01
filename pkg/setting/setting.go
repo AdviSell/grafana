@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/grafana/grafana-aws-sdk/pkg/awsds"
 	"github.com/grafana/grafana-plugin-sdk-go/backend/gtime"
+
 	"github.com/grafana/grafana/pkg/infra/log"
 	"github.com/grafana/grafana/pkg/util"
 
@@ -141,6 +143,8 @@ var (
 	GoogleTagManagerId      string
 	RudderstackDataPlaneUrl string
 	RudderstackWriteKey     string
+	RudderstackSdkUrl       string
+	RudderstackConfigUrl    string
 
 	// LDAP
 	LDAPEnabled           bool
@@ -153,7 +157,7 @@ var (
 	Quota QuotaSettings
 
 	// Alerting
-	AlertingEnabled            bool
+	AlertingEnabled            *bool
 	ExecuteAlerts              bool
 	AlertingRenderLimit        int
 	AlertingErrorOrTimeout     string
@@ -203,6 +207,7 @@ type Cfg struct {
 	EnforceDomain    bool
 
 	// Security settings
+	SecretKey             string
 	EmailCodeValidMinutes int
 
 	// build
@@ -257,6 +262,7 @@ type Cfg struct {
 	PluginSettings                   PluginSettings
 	PluginsAllowUnsigned             []string
 	PluginCatalogURL                 string
+	PluginCatalogHiddenPlugins       []string
 	PluginAdminEnabled               bool
 	PluginAdminExternalManageEnabled bool
 	DisableSanitizeHtml              bool
@@ -313,6 +319,7 @@ type Cfg struct {
 	JWTAuthCacheTTL      time.Duration
 	JWTAuthKeyFile       string
 	JWTAuthJWKSetFile    string
+	JWTAuthAutoSignUp    bool
 
 	// Dataproxy
 	SendUserHeader                 bool
@@ -335,8 +342,10 @@ type Cfg struct {
 
 	ApiKeyMaxSecondsToLive int64
 
-	// Use to enable new features which may still be in alpha/beta stage.
-	FeatureToggles       map[string]bool
+	// Check if a feature toggle is enabled
+	// @deprecated
+	IsFeatureToggleEnabled func(key string) bool // filled in dynamically
+
 	AnonymousEnabled     bool
 	AnonymousOrgName     string
 	AnonymousOrgRole     string
@@ -420,32 +429,9 @@ type Cfg struct {
 
 	// Unified Alerting
 	UnifiedAlerting UnifiedAlertingSettings
-}
 
-// IsLiveConfigEnabled returns true if live should be able to save configs to SQL tables
-func (cfg Cfg) IsLiveConfigEnabled() bool {
-	return cfg.FeatureToggles["live-config"]
-}
-
-// IsTrimDefaultsEnabled returns whether the standalone trim dashboard default feature is enabled.
-func (cfg Cfg) IsTrimDefaultsEnabled() bool {
-	return cfg.FeatureToggles["trimDefaults"]
-}
-
-// IsDatabaseMetricsEnabled returns whether the database instrumentation feature is enabled.
-func (cfg Cfg) IsDatabaseMetricsEnabled() bool {
-	return cfg.FeatureToggles["database_metrics"]
-}
-
-// IsHTTPRequestHistogramDisabled returns whether the request historgrams is disabled.
-// This feature toggle will be removed in Grafana 8.x but gives the operator
-// some graceperiod to update all the monitoring tools.
-func (cfg Cfg) IsHTTPRequestHistogramDisabled() bool {
-	return cfg.FeatureToggles["disable_http_request_histogram"]
-}
-
-func (cfg Cfg) IsNewNavigationEnabled() bool {
-	return cfg.FeatureToggles["newNavigation"]
+	// Query history
+	QueryHistoryEnabled bool
 }
 
 type CommandLineArgs struct {
@@ -454,7 +440,7 @@ type CommandLineArgs struct {
 	Args     []string
 }
 
-func parseAppUrlAndSubUrl(section *ini.Section) (string, string, error) {
+func (cfg Cfg) parseAppUrlAndSubUrl(section *ini.Section) (string, string, error) {
 	appUrl := valueAsString(section, "root_url", "http://localhost:3000/")
 
 	if appUrl[len(appUrl)-1] != '/' {
@@ -464,7 +450,7 @@ func parseAppUrlAndSubUrl(section *ini.Section) (string, string, error) {
 	// Check if has app suburl.
 	url, err := url.Parse(appUrl)
 	if err != nil {
-		log.Error("Invalid root_url.", "url", appUrl, "error", err)
+		cfg.Logger.Error("Invalid root_url.", "url", appUrl, "error", err)
 		os.Exit(1)
 	}
 
@@ -487,30 +473,69 @@ func RedactedValue(key, value string) string {
 		"SECRET_KEY",
 		"CERTIFICATE",
 		"ACCOUNT_KEY",
+		"ENCRYPTION_KEY",
+		"VAULT_TOKEN",
 	} {
-		if strings.Contains(uppercased, pattern) {
+		if match, err := regexp.MatchString(pattern, uppercased); match && err == nil {
 			return RedactedPassword
 		}
 	}
-	// Sensitive URLs that might contain username and password
-	for _, pattern := range []string{
-		"DATABASE_URL",
+
+	for _, exception := range []string{
+		"RUDDERSTACK",
+		"APPLICATION_INSIGHTS",
+		"SENTRY",
 	} {
-		if strings.Contains(uppercased, pattern) {
-			if u, err := url.Parse(value); err == nil {
-				return u.Redacted()
-			}
+		if strings.Contains(uppercased, exception) {
+			return value
 		}
 	}
-	// Otherwise return unmodified value
+
+	if u, err := RedactedURL(value); err == nil {
+		return u
+	}
+
 	return value
+}
+
+func RedactedURL(value string) (string, error) {
+	// Value could be a list of URLs
+	chunks := util.SplitString(value)
+
+	for i, chunk := range chunks {
+		var hasTmpPrefix bool
+		const tmpPrefix = "http://"
+
+		if !strings.Contains(chunk, "://") {
+			chunk = tmpPrefix + chunk
+			hasTmpPrefix = true
+		}
+
+		u, err := url.Parse(chunk)
+		if err != nil {
+			return "", err
+		}
+
+		redacted := u.Redacted()
+		if hasTmpPrefix {
+			redacted = strings.Replace(redacted, tmpPrefix, "", 1)
+		}
+
+		chunks[i] = redacted
+	}
+
+	if strings.Contains(value, ",") {
+		return strings.Join(chunks, ","), nil
+	}
+
+	return strings.Join(chunks, " "), nil
 }
 
 func applyEnvVariableOverrides(file *ini.File) error {
 	appliedEnvOverrides = make([]string, 0)
 	for _, section := range file.Sections() {
 		for _, key := range section.Keys() {
-			envKey := envKey(section.Name(), key.Name())
+			envKey := EnvKey(section.Name(), key.Name())
 			envValue := os.Getenv(envKey)
 
 			if len(envValue) > 0 {
@@ -581,7 +606,7 @@ type AnnotationCleanupSettings struct {
 	MaxCount int64
 }
 
-func envKey(sectionName string, keyName string) string {
+func EnvKey(sectionName string, keyName string) string {
 	sN := strings.ToUpper(strings.ReplaceAll(sectionName, ".", "_"))
 	sN = strings.ReplaceAll(sN, "-", "_")
 	kN := strings.ToUpper(strings.ReplaceAll(keyName, ".", "_"))
@@ -621,7 +646,7 @@ func applyCommandLineProperties(props map[string]string, file *ini.File) {
 	}
 }
 
-func getCommandLineProperties(args []string) map[string]string {
+func (cfg Cfg) getCommandLineProperties(args []string) map[string]string {
 	props := make(map[string]string)
 
 	for _, arg := range args {
@@ -632,7 +657,7 @@ func getCommandLineProperties(args []string) map[string]string {
 		trimmed := strings.TrimPrefix(arg, "cfg:")
 		parts := strings.Split(trimmed, "=")
 		if len(parts) != 2 {
-			log.Error("Invalid command line argument.", "argument", arg)
+			cfg.Logger.Error("Invalid command line argument.", "argument", arg)
 			os.Exit(1)
 		}
 
@@ -708,7 +733,7 @@ func (cfg *Cfg) loadConfiguration(args CommandLineArgs) (*ini.File, error) {
 	parsedFile.BlockMode = false
 
 	// command line props
-	commandLineProps := getCommandLineProperties(args.Args)
+	commandLineProps := cfg.getCommandLineProperties(args.Args)
 	// load default overrides
 	applyCommandLineDefaultProperties(commandLineProps, parsedFile)
 
@@ -719,7 +744,7 @@ func (cfg *Cfg) loadConfiguration(args CommandLineArgs) (*ini.File, error) {
 		if err2 != nil {
 			return nil, err2
 		}
-		log.Error(err.Error())
+		cfg.Logger.Error(err.Error())
 		os.Exit(1)
 	}
 
@@ -901,6 +926,8 @@ func (cfg *Cfg) Load(args CommandLineArgs) error {
 	GoogleTagManagerId = analytics.Key("google_tag_manager_id").String()
 	RudderstackWriteKey = analytics.Key("rudderstack_write_key").String()
 	RudderstackDataPlaneUrl = analytics.Key("rudderstack_data_plane_url").String()
+	RudderstackSdkUrl = analytics.Key("rudderstack_sdk_url").String()
+	RudderstackConfigUrl = analytics.Key("rudderstack_config_url").String()
 	cfg.ReportingEnabled = analytics.Key("reporting_enabled").MustBool(true)
 	cfg.ReportingDistributor = analytics.Key("reporting_distributor").MustString("grafana-labs")
 	if len(cfg.ReportingDistributor) >= 100 {
@@ -912,28 +939,19 @@ func (cfg *Cfg) Load(args CommandLineArgs) error {
 	if err := readAlertingSettings(iniFile); err != nil {
 		return err
 	}
-	if err := cfg.ReadUnifiedAlertingSettings(iniFile); err != nil {
-		return err
-	}
 
 	explore := iniFile.Section("explore")
 	ExploreEnabled = explore.Key("enabled").MustBool(true)
 
+	queryHistory := iniFile.Section("query_history")
+	cfg.QueryHistoryEnabled = queryHistory.Key("enabled").MustBool(false)
+
 	panelsSection := iniFile.Section("panels")
 	cfg.DisableSanitizeHtml = panelsSection.Key("disable_sanitize_html").MustBool(false)
 
-	pluginsSection := iniFile.Section("plugins")
-	cfg.PluginsEnableAlpha = pluginsSection.Key("enable_alpha").MustBool(false)
-	cfg.PluginsAppsSkipVerifyTLS = pluginsSection.Key("app_tls_skip_verify_insecure").MustBool(false)
-	cfg.PluginSettings = extractPluginSettings(iniFile.Sections())
-	pluginsAllowUnsigned := pluginsSection.Key("allow_loading_unsigned_plugins").MustString("")
-	for _, plug := range strings.Split(pluginsAllowUnsigned, ",") {
-		plug = strings.TrimSpace(plug)
-		cfg.PluginsAllowUnsigned = append(cfg.PluginsAllowUnsigned, plug)
+	if err := cfg.readPluginSettings(iniFile); err != nil {
+		return err
 	}
-	cfg.PluginCatalogURL = pluginsSection.Key("plugin_catalog_url").MustString("https://grafana.com/grafana/plugins/")
-	cfg.PluginAdminEnabled = pluginsSection.Key("plugin_admin_enabled").MustBool(true)
-	cfg.PluginAdminExternalManageEnabled = pluginsSection.Key("plugin_admin_external_manage_enabled").MustBool(false)
 
 	if err := cfg.readFeatureToggles(iniFile); err != nil {
 		return err
@@ -963,7 +981,7 @@ func (cfg *Cfg) Load(args CommandLineArgs) error {
 	cfg.readDataSourcesSettings()
 
 	if VerifyEmailEnabled && !cfg.Smtp.Enabled {
-		log.Warn("require_email_validation is enabled but smtp is disabled")
+		cfg.Logger.Warn("require_email_validation is enabled but smtp is disabled")
 	}
 
 	// check old key  name
@@ -1116,7 +1134,7 @@ type DynamicSection struct {
 // Key dynamically overrides keys with environment variables.
 // As a side effect, the value of the setting key will be updated if an environment variable is present.
 func (s *DynamicSection) Key(k string) *ini.Key {
-	envKey := envKey(s.section.Name(), k)
+	envKey := EnvKey(s.section.Name(), k)
 	envValue := os.Getenv(envKey)
 	key := s.section.Key(k)
 
@@ -1139,6 +1157,7 @@ func (cfg *Cfg) SectionWithEnvOverrides(s string) *DynamicSection {
 func readSecuritySettings(iniFile *ini.File, cfg *Cfg) error {
 	security := iniFile.Section("security")
 	SecretKey = valueAsString(security, "secret_key", "")
+	cfg.SecretKey = SecretKey
 	DisableGravatar = security.Key("disable_gravatar").MustBool(true)
 	cfg.DisableBruteForceLoginProtection = security.Key("disable_brute_force_login_protection").MustBool(false)
 
@@ -1262,6 +1281,7 @@ func readAuthSettings(iniFile *ini.File, cfg *Cfg) (err error) {
 	cfg.JWTAuthCacheTTL = authJWT.Key("cache_ttl").MustDuration(time.Minute * 60)
 	cfg.JWTAuthKeyFile = valueAsString(authJWT, "key_file", "")
 	cfg.JWTAuthJWKSetFile = valueAsString(authJWT, "jwk_set_file", "")
+	cfg.JWTAuthAutoSignUp = authJWT.Key("auto_sign_up").MustBool(false)
 
 	authProxy := iniFile.Section("auth.proxy")
 	AuthProxyEnabled = authProxy.Key("enabled").MustBool(false)
@@ -1358,7 +1378,7 @@ func (cfg *Cfg) readRenderingSettings(iniFile *ini.File) error {
 		_, err := url.Parse(cfg.RendererCallbackUrl)
 		if err != nil {
 			// XXX: Should return an error?
-			log.Error("Invalid callback_url.", "url", cfg.RendererCallbackUrl, "error", err)
+			cfg.Logger.Error("Invalid callback_url.", "url", cfg.RendererCallbackUrl, "error", err)
 			os.Exit(1)
 		}
 	}
@@ -1370,20 +1390,13 @@ func (cfg *Cfg) readRenderingSettings(iniFile *ini.File) error {
 	return nil
 }
 
-func (cfg *Cfg) readFeatureToggles(iniFile *ini.File) error {
-	// Read and populate feature toggles list
-	featureTogglesSection := iniFile.Section("feature_toggles")
-	cfg.FeatureToggles = make(map[string]bool)
-	featuresTogglesStr := valueAsString(featureTogglesSection, "enable", "")
-	for _, feature := range util.SplitString(featuresTogglesStr) {
-		cfg.FeatureToggles[feature] = true
-	}
-	return nil
-}
-
 func readAlertingSettings(iniFile *ini.File) error {
 	alerting := iniFile.Section("alerting")
-	AlertingEnabled = alerting.Key("enabled").MustBool(true)
+	enabled, err := alerting.Key("enabled").Bool()
+	AlertingEnabled = nil
+	if err == nil {
+		AlertingEnabled = &enabled
+	}
 	ExecuteAlerts = alerting.Key("execute_alerts").MustBool(true)
 	AlertingRenderLimit = alerting.Key("concurrent_render_limit").MustInt(5)
 
@@ -1416,7 +1429,7 @@ func readSnapshotsSettings(cfg *Cfg, iniFile *ini.File) error {
 func (cfg *Cfg) readServerSettings(iniFile *ini.File) error {
 	server := iniFile.Section("server")
 	var err error
-	AppUrl, AppSubUrl, err = parseAppUrlAndSubUrl(server)
+	AppUrl, AppSubUrl, err = cfg.parseAppUrlAndSubUrl(server)
 	if err != nil {
 		return err
 	}

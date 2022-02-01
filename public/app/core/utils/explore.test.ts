@@ -114,6 +114,7 @@ describe('state functions', () => {
       );
     });
 
+    // TODO: remove in 9.0
     it('returns url parameter value for a state object', () => {
       const state = {
         ...DEFAULT_EXPLORE_STATE,
@@ -134,7 +135,7 @@ describe('state functions', () => {
         },
       };
       expect(serializeStateToUrlParam(state, true)).toBe(
-        '["now-5h","now","foo",{"expr":"metric{test=\\"a/b\\"}","refId":"A"},{"expr":"super{foo=\\"x/z\\"}","refId":"B"}]'
+        '{"datasource":"foo","queries":[{"expr":"metric{test=\\"a/b\\"}","refId":"A"},{"expr":"super{foo=\\"x/z\\"}","refId":"B"}],"range":{"from":"now-5h","to":"now"}}'
       );
     });
   });
@@ -164,6 +165,7 @@ describe('state functions', () => {
       expect(state).toMatchObject(parsed);
     });
 
+    // TODO: remove in 9.0
     it('can parse the compact serialized state into the original state', () => {
       const state = {
         ...DEFAULT_EXPLORE_STATE,
@@ -182,6 +184,36 @@ describe('state functions', () => {
           from: 'now - 5h',
           to: 'now',
         },
+        panelsState: undefined,
+      };
+      const serialized = serializeStateToUrlParam(state, true);
+      const parsed = parseUrlState(serialized);
+      expect(state).toMatchObject(parsed);
+    });
+
+    it('can parse serialized panelsState into the original state', () => {
+      const state = {
+        ...DEFAULT_EXPLORE_STATE,
+        datasource: 'foo',
+        queries: [
+          {
+            expr: 'metric{test="a/b"}',
+            refId: 'A',
+          },
+          {
+            expr: 'super{foo="x/z"}',
+            refId: 'B',
+          },
+        ],
+        range: {
+          from: 'now - 5h',
+          to: 'now',
+        },
+        panelsState: {
+          trace: {
+            spanId: 'abcdef',
+          },
+        },
       };
       const serialized = serializeStateToUrlParam(state, true);
       const parsed = parseUrlState(serialized);
@@ -198,7 +230,9 @@ describe('getExploreUrl', () => {
     },
     datasourceSrv: {
       get() {
-        return {};
+        return {
+          getRef: jest.fn(),
+        };
       },
       getDataSourceById: jest.fn(),
     },
@@ -239,7 +273,7 @@ describe('hasNonEmptyQuery', () => {
   });
 
   test('should return false if query is empty', () => {
-    expect(hasNonEmptyQuery([{ refId: '1', key: '2', context: 'panel', datasource: 'some-ds' }])).toBeFalsy();
+    expect(hasNonEmptyQuery([{ refId: '1', key: '2', context: 'panel', datasource: { uid: 'some-ds' } }])).toBeFalsy();
   });
 
   test('should return false if no queries exist', () => {

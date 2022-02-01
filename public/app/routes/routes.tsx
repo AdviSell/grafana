@@ -8,10 +8,11 @@ import { SafeDynamicImport } from '../core/components/DynamicImports/SafeDynamic
 import { RouteDescriptor } from '../core/navigation/types';
 import { Redirect } from 'react-router-dom';
 import ErrorPage from 'app/core/components/ErrorPage/ErrorPage';
-import { getPluginsAdminRoutes } from 'app/features/plugins/routes';
+import { getRoutes as getPluginCatalogRoutes } from 'app/features/plugins/admin/routes';
 import { contextSrv } from 'app/core/services/context_srv';
 import { getLiveRoutes } from 'app/features/live/pages/routes';
 import { getAlertingRoutes } from 'app/features/alerting/routes';
+import ServiceAccountPage from 'app/features/serviceaccounts/ServiceAccountPage';
 
 export const extraRoutes: RouteDescriptor[] = [];
 
@@ -150,7 +151,7 @@ export function getAppRoutes(): RouteDescriptor[] {
       exact: false,
       // Someday * and will get a ReactRouter under that path!
       component: SafeDynamicImport(
-        () => import(/* webpackChunkName: "AppRootPage" */ 'app/features/plugins/AppRootPage')
+        () => import(/* webpackChunkName: "AppRootPage" */ 'app/features/plugins/components/AppRootPage')
       ),
     },
     {
@@ -181,6 +182,18 @@ export function getAppRoutes(): RouteDescriptor[] {
       component: SafeDynamicImport(
         () => import(/* webpackChunkName: "ApiKeysPage" */ 'app/features/api-keys/ApiKeysPage')
       ),
+    },
+    {
+      path: '/org/serviceaccounts',
+      roles: () => ['Editor', 'Admin'],
+      component: SafeDynamicImport(
+        () =>
+          import(/* webpackChunkName: "ServiceAccountsPage" */ 'app/features/serviceaccounts/ServiceAccountsListPage')
+      ),
+    },
+    {
+      path: '/org/serviceaccounts/:id',
+      component: ServiceAccountPage,
     },
     {
       path: '/org/teams',
@@ -324,13 +337,6 @@ export function getAppRoutes(): RouteDescriptor[] {
         () => import(/* webpackChunkName: "SnapshotListPage" */ 'app/features/manage-dashboards/SnapshotListPage')
       ),
     },
-    // TODO[Router]
-    // {
-    //   path: '/plugins/:pluginId/page/:slug',
-    //   templateUrl: 'public/app/features/plugins/partials/plugin_page.html',
-    //   controller: 'AppPageCtrl',
-    //   controllerAs: 'ctrl',
-    // },
     {
       path: '/playlists',
       component: SafeDynamicImport(
@@ -379,7 +385,7 @@ export function getAppRoutes(): RouteDescriptor[] {
         () => import(/* webpackChunkName: "LibraryPanelsPage"*/ 'app/features/library-panels/LibraryPanelsPage')
       ),
     },
-    ...getPluginsAdminRoutes(),
+    ...getPluginCatalogRoutes(),
     ...getLiveRoutes(),
     ...getAlertingRoutes(),
     ...extraRoutes,

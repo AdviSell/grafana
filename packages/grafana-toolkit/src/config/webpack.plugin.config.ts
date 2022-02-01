@@ -97,8 +97,9 @@ const getCommonPlugins = (options: WebpackConfigurationOptions) => {
     new CopyWebpackPlugin(
       [
         // If src/README.md exists use it; otherwise the root README
-        { from: hasREADME ? 'README.md' : '../README.md', to: '.', force: true },
+        { from: hasREADME ? 'README.md' : '../README.md', to: '.', force: true, prority: 1 },
         { from: 'plugin.json', to: '.' },
+        { from: '**/README.md', to: '[path]README.md', priority: 0 },
         { from: '../LICENSE', to: '.' },
         { from: '../CHANGELOG.md', to: '.', force: true },
         { from: '**/*.json', to: '.' },
@@ -129,9 +130,10 @@ const getCommonPlugins = (options: WebpackConfigurationOptions) => {
       },
     ]),
     new ForkTsCheckerWebpackPlugin({
-      tsconfig: path.join(process.cwd(), 'tsconfig.json'),
-      // Only report problems in detected in plugin's code
-      reportFiles: ['**/*.{ts,tsx}'],
+      typescript: { configFile: path.join(process.cwd(), 'tsconfig.json') },
+      issue: {
+        include: [{ file: '**/*.{ts,tsx}' }],
+      },
     }),
   ];
 };
@@ -170,7 +172,6 @@ const getBaseWebpackConfig: WebpackConfigurationGetter = async (options) => {
 
     performance: { hints: false },
     externals: [
-      'tslib',
       'lodash',
       'jquery',
       'moment',

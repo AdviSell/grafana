@@ -127,6 +127,7 @@ export class PanelEditorUnconnected extends PureComponent<Props> {
     locationService.partial({
       editPanel: null,
       tab: null,
+      showCategory: null,
     });
   };
 
@@ -252,7 +253,7 @@ export class PanelEditorUnconnected extends PureComponent<Props> {
                       panel={panel}
                       isEditing={true}
                       isViewing={false}
-                      isInView={true}
+                      lazy={false}
                       width={panelSize.width}
                       height={panelSize.height}
                       skipStateCleanUp={true}
@@ -421,7 +422,7 @@ export class PanelEditorUnconnected extends PureComponent<Props> {
   }
 
   onGoBackToDashboard = () => {
-    locationService.partial({ editPanel: null, tab: null });
+    locationService.partial({ editPanel: null, tab: null, showCategory: null });
   };
 
   onConfirmAndDismissLibarayPanelModel = () => {

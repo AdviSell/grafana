@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,11 @@ import (
 // StartGrafana starts a Grafana server.
 // The server address is returned.
 func StartGrafana(t *testing.T, grafDir, cfgPath string) (string, *sqlstore.SQLStore) {
+	addr, env := StartGrafanaEnv(t, grafDir, cfgPath)
+	return addr, env.SQLStore
+}
+
+func StartGrafanaEnv(t *testing.T, grafDir, cfgPath string) (string, *server.TestEnv) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -64,7 +70,7 @@ func StartGrafana(t *testing.T, grafDir, cfgPath string) (string, *sqlstore.SQLS
 
 	t.Logf("Grafana is listening on %s", addr)
 
-	return addr, env.SQLStore
+	return addr, env
 }
 
 // SetUpDatabase sets up the Grafana database.
@@ -157,6 +163,9 @@ func CreateGrafDir(t *testing.T, opts ...GrafanaOpts) (string, string) {
 	provDashboardsDir := filepath.Join(provDir, "dashboards")
 	err = os.MkdirAll(provDashboardsDir, 0750)
 	require.NoError(t, err)
+	corePluginsDir := filepath.Join(publicDir, "app/plugins")
+	err = fs.CopyRecursive(filepath.Join(rootDir, "public", "app/plugins"), corePluginsDir)
+	require.NoError(t, err)
 
 	cfg := ini.Empty()
 	dfltSect := cfg.Section("")
@@ -236,6 +245,12 @@ func CreateGrafDir(t *testing.T, opts ...GrafanaOpts) (string, string) {
 			require.NoError(t, err)
 			_, err = quotaSection.NewKey("enabled", "true")
 			require.NoError(t, err)
+			dashboardQuota := int64(100)
+			if o.DashboardOrgQuota != nil {
+				dashboardQuota = *o.DashboardOrgQuota
+			}
+			_, err = quotaSection.NewKey("org_dashboard", strconv.FormatInt(dashboardQuota, 10))
+			require.NoError(t, err)
 		}
 		if o.DisableAnonymous {
 			anonSect, err := cfg.GetSection("auth.anonymous")
@@ -293,6 +308,7 @@ type GrafanaOpts struct {
 	NGAlertAlertmanagerConfigPollInterval time.Duration
 	AnonymousUserRole                     models.RoleType
 	EnableQuota                           bool
+	DashboardOrgQuota                     *int64
 	DisableAnonymous                      bool
 	CatalogAppEnabled                     bool
 	ViewersCanEdit                        bool

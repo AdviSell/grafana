@@ -19,6 +19,8 @@ import { configFromQueryTransformRegistryItem } from '../components/Transformers
 import { prepareTimeseriesTransformerRegistryItem } from '../components/TransformersUI/prepareTimeSeries/PrepareTimeSeriesEditor';
 import { convertFieldTypeTransformRegistryItem } from '../components/TransformersUI/ConvertFieldTypeTransformerEditor';
 import { fieldLookupTransformRegistryItem } from '../components/TransformersUI/lookupGazetteer/FieldLookupTransformerEditor';
+import { extractFieldsTransformRegistryItem } from '../components/TransformersUI/extractFields/ExtractFieldsTransformerEditor';
+import { spatialTransformRegistryItem } from '../components/TransformersUI/spatial/SpatialTransformerEditor';
 
 export const getStandardTransformers = (): Array<TransformerRegistryItem<any>> => {
   return [
@@ -41,6 +43,8 @@ export const getStandardTransformers = (): Array<TransformerRegistryItem<any>> =
     configFromQueryTransformRegistryItem,
     prepareTimeseriesTransformerRegistryItem,
     convertFieldTypeTransformRegistryItem,
+    spatialTransformRegistryItem,
     fieldLookupTransformRegistryItem,
+    extractFieldsTransformRegistryItem,
   ];
 };
